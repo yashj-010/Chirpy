@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -57,5 +58,21 @@ func TestWrongSecret(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected invalid signature")
+	}
+}
+
+func TestGetBearerToken(t *testing.T) {
+
+	h := http.Header{}
+	h.Set("Authorization", "Bearer abc123")
+
+	token, err := GetBearerToken(h)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if token != "abc123" {
+		t.Fatal("wrong token")
 	}
 }
