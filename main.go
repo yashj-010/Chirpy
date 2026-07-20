@@ -17,7 +17,7 @@ import (
 
 	"time"
 
-    "github.com/google/uuid"
+	"github.com/google/uuid"
 )
 
 type apiConfig struct {
@@ -148,6 +148,28 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 	respondWithJSON(w, http.StatusCreated, chirp)
 }
 
+func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
+    dbChirps, err := cfg.dbQueries.GetChirps(r.Context())
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps")
+        return
+    }
+
+    chirps := make([]Chirp, 0, len(dbChirps))
+
+    for _, dbChirp := range dbChirps {
+        chirps = append(chirps, Chirp{
+            ID:        dbChirp.ID,
+            CreatedAt: dbChirp.CreatedAt,
+            UpdatedAt: dbChirp.UpdatedAt,
+            Body:      dbChirp.Body,
+            UserID:    dbChirp.UserID,
+        })
+    }
+
+    respondWithJSON(w, http.StatusOK, chirps)
+}
+
 func cleanChirp(body string) string {
 	badWords := map[string]bool{
 		"kerfuffle": true,
@@ -222,6 +244,7 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
+	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
