@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"sort"
 
 	"database/sql"
 	"os"
@@ -164,43 +165,54 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
-    authorIDString := r.URL.Query().Get("author_id")
+	authorIDString := r.URL.Query().Get("author_id")
+	sortOrder := r.URL.Query().Get("sort")
 
-    var (
-        dbChirps []database.Chirp
-        err      error
-    )
+	var (
+		dbChirps []database.Chirp
+		err      error
+	)
 
-    if authorIDString != "" {
-        authorID, err := uuid.Parse(authorIDString)
-        if err != nil {
-            respondWithError(w, http.StatusBadRequest, "Invalid author ID")
-            return
-        }
+	if authorIDString != "" {
+		authorID, err := uuid.Parse(authorIDString)
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, "Invalid author ID")
+			return
+		}
 
-        dbChirps, err = cfg.dbQueries.GetChirpsByAuthor(r.Context(), authorID)
-    } else {
-        dbChirps, err = cfg.dbQueries.GetChirps(r.Context())
-    }
+		dbChirps, err = cfg.dbQueries.GetChirpsByAuthor(r.Context(), authorID)
+	} else {
+		dbChirps, err = cfg.dbQueries.GetChirps(r.Context())
+	}
 
-    if err != nil {
-        respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps")
-        return
-    }
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps")
+		return
+	}
 
-    chirps := make([]Chirp, 0, len(dbChirps))
+	if sortOrder == "desc" {
+		sort.Slice(dbChirps, func(i, j int) bool {
+			return dbChirps[i].CreatedAt.After(dbChirps[j].CreatedAt)
+		})
+	} else {
+		sort.Slice(dbChirps, func(i, j int) bool {
+			return dbChirps[i].CreatedAt.Before(dbChirps[j].CreatedAt)
+		})
+	}
 
-    for _, dbChirp := range dbChirps {
-        chirps = append(chirps, Chirp{
-            ID:        dbChirp.ID,
-            CreatedAt: dbChirp.CreatedAt,
-            UpdatedAt: dbChirp.UpdatedAt,
-            Body:      dbChirp.Body,
-            UserID:    dbChirp.UserID,
-        })
-    }
+	chirps := make([]Chirp, 0, len(dbChirps))
 
-    respondWithJSON(w, http.StatusOK, chirps)
+	for _, dbChirp := range dbChirps {
+		chirps = append(chirps, Chirp{
+			ID:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			Body:      dbChirp.Body,
+			UserID:    dbChirp.UserID,
+		})
+	}
+
+	respondWithJSON(w, http.StatusOK, chirps)
 }
 
 func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
