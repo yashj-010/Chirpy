@@ -164,25 +164,43 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
-	dbChirps, err := cfg.dbQueries.GetChirps(r.Context())
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps")
-		return
-	}
+    authorIDString := r.URL.Query().Get("author_id")
 
-	chirps := make([]Chirp, 0, len(dbChirps))
+    var (
+        dbChirps []database.Chirp
+        err      error
+    )
 
-	for _, dbChirp := range dbChirps {
-		chirps = append(chirps, Chirp{
-			ID:        dbChirp.ID,
-			CreatedAt: dbChirp.CreatedAt,
-			UpdatedAt: dbChirp.UpdatedAt,
-			Body:      dbChirp.Body,
-			UserID:    dbChirp.UserID,
-		})
-	}
+    if authorIDString != "" {
+        authorID, err := uuid.Parse(authorIDString)
+        if err != nil {
+            respondWithError(w, http.StatusBadRequest, "Invalid author ID")
+            return
+        }
 
-	respondWithJSON(w, http.StatusOK, chirps)
+        dbChirps, err = cfg.dbQueries.GetChirpsByAuthor(r.Context(), authorID)
+    } else {
+        dbChirps, err = cfg.dbQueries.GetChirps(r.Context())
+    }
+
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps")
+        return
+    }
+
+    chirps := make([]Chirp, 0, len(dbChirps))
+
+    for _, dbChirp := range dbChirps {
+        chirps = append(chirps, Chirp{
+            ID:        dbChirp.ID,
+            CreatedAt: dbChirp.CreatedAt,
+            UpdatedAt: dbChirp.UpdatedAt,
+            Body:      dbChirp.Body,
+            UserID:    dbChirp.UserID,
+        })
+    }
+
+    respondWithJSON(w, http.StatusOK, chirps)
 }
 
 func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
