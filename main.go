@@ -272,9 +272,8 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 // Login Handler
 func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	params := parameters{}
@@ -298,14 +297,6 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 
 	expires := time.Hour
 
-	if params.ExpiresInSeconds > 0 {
-		expires = time.Duration(params.ExpiresInSeconds) * time.Second
-
-		if expires > time.Hour {
-			expires = time.Hour
-		}
-	}
-
 	token, err := auth.MakeJWT(
 		dbUser.ID,
 		cfg.jwtSecret,
@@ -316,22 +307,96 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refreshToken := auth.MakeRefreshToken()
+
+	_, err = cfg.dbQueries.CreateRefreshToken(
+		r.Context(),
+		database.CreateRefreshTokenParams{
+			Token:     refreshToken,
+			UserID:    dbUser.ID,
+			ExpiresAt: time.Now().UTC().Add(60 * 24 * time.Hour),
+		},
+	)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't save refresh token")
+		return
+	}
+
 	type LoginResponse struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
-		Token     string    `json:"token"`
+		ID           uuid.UUID `json:"id"`
+		CreatedAt    time.Time `json:"created_at"`
+		UpdatedAt    time.Time `json:"updated_at"`
+		Email        string    `json:"email"`
+		Token        string    `json:"token"`
+		RefreshToken string    `json:"refresh_token"`
 	}
 
 	respondWithJSON(w, http.StatusOK, LoginResponse{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
-		Token:     token,
+		ID:           dbUser.ID,
+		CreatedAt:    dbUser.CreatedAt,
+		UpdatedAt:    dbUser.UpdatedAt,
+		Email:        dbUser.Email,
+		Token:        token,
+		RefreshToken: refreshToken,
 	})
 
+}
+
+// Refresh Handler
+func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
+    token, err := auth.GetBearerToken(r.Header)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+        return
+    }
+
+    dbToken, err := cfg.dbQueries.GetUserFromRefreshToken(r.Context(), token)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+        return
+    }
+
+    if dbToken.RevokedAt.Valid {
+        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+        return
+    }
+
+    if dbToken.ExpiresAt.Before(time.Now().UTC()) {
+        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+        return
+    }
+
+    accessToken, err := auth.MakeJWT(
+        dbToken.UserID,
+        cfg.jwtSecret,
+        time.Hour,
+    )
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Couldn't create token")
+        return
+    }
+
+    respondWithJSON(w, http.StatusOK, map[string]string{
+        "token": accessToken,
+    })
+}
+
+// Revoke Handler
+func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
+
+    token, err := auth.GetBearerToken(r.Header)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+        return
+    }
+
+    err = cfg.dbQueries.RevokeRefreshToken(r.Context(), token)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Couldn't revoke token")
+        return
+    }
+
+    w.WriteHeader(http.StatusNoContent)
 }
 
 func main() {
@@ -372,6 +437,8 @@ func main() {
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 
 	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
+	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
+	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
 
 	// File server
 	fileServer := http.FileServer(http.Dir("."))
