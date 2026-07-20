@@ -209,6 +209,50 @@ func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, chirp)
 }
 
+func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	// Authenticate user
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	// Parse chirp ID
+	chirpID, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Chirp not found")
+		return
+	}
+
+	// Get chirp
+	chirp, err := cfg.dbQueries.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Chirp not found")
+		return
+	}
+
+	// Check ownership
+	if chirp.UserID != userID {
+		respondWithError(w, http.StatusForbidden, "Forbidden")
+		return
+	}
+
+	// Delete chirp
+	err = cfg.dbQueries.DeleteChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't delete chirp")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func cleanChirp(body string) string {
 	badWords := map[string]bool{
 		"kerfuffle": true,
@@ -488,6 +532,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirp)
 
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
@@ -495,7 +540,7 @@ func main() {
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUser)
 	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
-	
+
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
 
