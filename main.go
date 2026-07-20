@@ -1,6 +1,7 @@
 package main
 
 import (
+	"chipry/internal/auth"
 	"chipry/internal/database"
 	"encoding/json"
 	"fmt"
@@ -149,25 +150,25 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
-    dbChirps, err := cfg.dbQueries.GetChirps(r.Context())
-    if err != nil {
-        respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps")
-        return
-    }
+	dbChirps, err := cfg.dbQueries.GetChirps(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps")
+		return
+	}
 
-    chirps := make([]Chirp, 0, len(dbChirps))
+	chirps := make([]Chirp, 0, len(dbChirps))
 
-    for _, dbChirp := range dbChirps {
-        chirps = append(chirps, Chirp{
-            ID:        dbChirp.ID,
-            CreatedAt: dbChirp.CreatedAt,
-            UpdatedAt: dbChirp.UpdatedAt,
-            Body:      dbChirp.Body,
-            UserID:    dbChirp.UserID,
-        })
-    }
+	for _, dbChirp := range dbChirps {
+		chirps = append(chirps, Chirp{
+			ID:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			Body:      dbChirp.Body,
+			UserID:    dbChirp.UserID,
+		})
+	}
 
-    respondWithJSON(w, http.StatusOK, chirps)
+	respondWithJSON(w, http.StatusOK, chirps)
 }
 
 func (cfg *apiConfig) handlerGetChirp(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +217,8 @@ func cleanChirp(body string) string {
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	params := parameters{}
@@ -227,7 +229,19 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	dbUser, err := cfg.dbQueries.CreateUser(r.Context(), params.Email)
+	hashedPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't hash password")
+		return
+	}
+
+	dbUser, err := cfg.dbQueries.CreateUser(
+		r.Context(),
+		database.CreateUserParams{
+			Email:          params.Email,
+			HashedPassword: hashedPassword,
+		},
+	)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create user")
 		return
@@ -241,6 +255,42 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	respondWithJSON(w, http.StatusCreated, user)
+}
+
+// Login Handler
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	params := parameters{}
+
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+		return
+	}
+
+	dbUser, err := cfg.dbQueries.GetUserByEmail(r.Context(), params.Email)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+		return
+	}
+
+	ok, err := auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
+	if err != nil || !ok {
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+		return
+	}
+
+	user := User{
+		ID:        dbUser.ID,
+		CreatedAt: dbUser.CreatedAt,
+		UpdatedAt: dbUser.UpdatedAt,
+		Email:     dbUser.Email,
+	}
+
+	respondWithJSON(w, http.StatusOK, user)
 }
 
 func main() {
@@ -277,6 +327,8 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
 
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+
+	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 
 	// File server
 	fileServer := http.FileServer(http.Dir("."))
