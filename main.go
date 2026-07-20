@@ -29,10 +29,11 @@ type apiConfig struct {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID          uuid.UUID `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Email       string    `json:"email"`
+	IsChirpyRed bool      `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -304,10 +305,11 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	user := User{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
+		ID:          dbUser.ID,
+		CreatedAt:   dbUser.CreatedAt,
+		UpdatedAt:   dbUser.UpdatedAt,
+		Email:       dbUser.Email,
+		IsChirpyRed: dbUser.IsChirpyRed,
 	}
 
 	respondWithJSON(w, http.StatusCreated, user)
@@ -373,6 +375,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		Email        string    `json:"email"`
 		Token        string    `json:"token"`
 		RefreshToken string    `json:"refresh_token"`
+		IsChirpyRed  bool      `json:"is_chirpy_red"`
 	}
 
 	respondWithJSON(w, http.StatusOK, LoginResponse{
@@ -382,6 +385,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		Email:        dbUser.Email,
 		Token:        token,
 		RefreshToken: refreshToken,
+		IsChirpyRed:  dbUser.IsChirpyRed,
 	})
 
 }
@@ -437,68 +441,106 @@ func (cfg *apiConfig) handlerUpdateUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	respondWithJSON(w, http.StatusOK, User{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
+		ID:          dbUser.ID,
+		CreatedAt:   dbUser.CreatedAt,
+		UpdatedAt:   dbUser.UpdatedAt,
+		Email:       dbUser.Email,
+		IsChirpyRed: dbUser.IsChirpyRed,
 	})
 }
 
 // Refresh Handler
 func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
-    token, err := auth.GetBearerToken(r.Header)
-    if err != nil {
-        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
-        return
-    }
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
 
-    dbToken, err := cfg.dbQueries.GetUserFromRefreshToken(r.Context(), token)
-    if err != nil {
-        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
-        return
-    }
+	dbToken, err := cfg.dbQueries.GetUserFromRefreshToken(r.Context(), token)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
 
-    if dbToken.RevokedAt.Valid {
-        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
-        return
-    }
+	if dbToken.RevokedAt.Valid {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
 
-    if dbToken.ExpiresAt.Before(time.Now().UTC()) {
-        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
-        return
-    }
+	if dbToken.ExpiresAt.Before(time.Now().UTC()) {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
 
-    accessToken, err := auth.MakeJWT(
-        dbToken.UserID,
-        cfg.jwtSecret,
-        time.Hour,
-    )
-    if err != nil {
-        respondWithError(w, http.StatusInternalServerError, "Couldn't create token")
-        return
-    }
+	accessToken, err := auth.MakeJWT(
+		dbToken.UserID,
+		cfg.jwtSecret,
+		time.Hour,
+	)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create token")
+		return
+	}
 
-    respondWithJSON(w, http.StatusOK, map[string]string{
-        "token": accessToken,
-    })
+	respondWithJSON(w, http.StatusOK, map[string]string{
+		"token": accessToken,
+	})
 }
 
 // Revoke Handler
 func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 
-    token, err := auth.GetBearerToken(r.Header)
-    if err != nil {
-        respondWithError(w, http.StatusUnauthorized, "Unauthorized")
-        return
-    }
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
 
-    err = cfg.dbQueries.RevokeRefreshToken(r.Context(), token)
-    if err != nil {
-        respondWithError(w, http.StatusInternalServerError, "Couldn't revoke token")
-        return
-    }
+	err = cfg.dbQueries.RevokeRefreshToken(r.Context(), token)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't revoke token")
+		return
+	}
 
-    w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *apiConfig) handlerPolkaWebhook(w http.ResponseWriter, r *http.Request) {
+	type webhookRequest struct {
+		Event string `json:"event"`
+		Data struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}
+
+	params := webhookRequest{}
+
+	err := json.NewDecoder(r.Body).Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	// Ignore every event except user.upgraded
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	userID, err := uuid.Parse(params.Data.UserID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "User not found")
+		return
+	}
+
+	err = cfg.dbQueries.UpgradeUserToChirpyRed(r.Context(), userID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "User not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func main() {
@@ -543,6 +585,8 @@ func main() {
 
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
+
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlerPolkaWebhook)
 
 	// File server
 	fileServer := http.FileServer(http.Dir("."))
