@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -72,14 +73,13 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type response struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
 
 	params := parameters{}
 
 	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&params)
-	if err != nil {
+	if err := decoder.Decode(&params); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
 		return
 	}
@@ -89,9 +89,29 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cleaned := cleanChirp(params.Body)
+
 	respondWithJSON(w, http.StatusOK, response{
-		Valid: true,
+		CleanedBody: cleaned,
 	})
+}
+
+func cleanChirp(body string) string {
+	badWords := map[string]bool{
+		"kerfuffle": true,
+		"sharbert":  true,
+		"fornax":    true,
+	}
+
+	words := strings.Split(body, " ")
+
+	for i, word := range words {
+		if badWords[strings.ToLower(word)] {
+			words[i] = "****"
+		}
+	}
+
+	return strings.Join(words, " ")
 }
 
 func main() {
